@@ -1,0 +1,31 @@
+stages:
+  - BuildArtifacts
+  - DeployToNCE
+
+BuildArtifacts: 
+     image: registry.cae.com/gds/maven:jdk8
+     stage: BuildArtifacts
+     only:
+      - tags
+     script:
+      - mvn clean install -Dmaven.test.skip=true
+     artifacts:
+      expire_in: 2 hours
+      paths:
+         - ./target/*
+
+DeployToNCE:
+    image: registry.cae.com/docker/docker:17.12.0-dind-NoEntrypoint 
+    stage: DeployToNCE
+    only:
+      - tags
+    script:
+      - (all_proxy=http://172.17.18.84:8080 no_proxy=hub.com,h.com,.cae.com,hub.x dockerd -g /cache/var/lib/docker --registry-mirror=https://hub.paas.x --bip=172.172.171.1/24 --dns=172.26.61.250 --insecure-registry=hub.com --insecure-registry=h.com --insecure-registry=hub.x  > /var/log/docker 2>&1 &)
+      - until grep -wq /var/run/docker.sock /var/log/docker; do sleep 1; done
+      - docker login -u $NCE_USERNAME -p $NCE_PASSWORD hub.x
+      - docker login -u gitlab-ci-token -p $CI_BUILD_TOKEN registry.cae.com
+      - docker build -t hub.x/precisetesting/cov:$CI_BUILD_TAG .
+      - docker push hub.x/precisetesting/cov:$CI_BUILD_TAG
+      - curl -c nce.x.cookie -X POST --data '{"name":"'$NCE_USERNAME'","password":"'$NCE_PASSWORD'"}' nce.x/u/user/login
+      - curl -b nce.x.cookie -X PUT --data '{"Name":"precisetesting_cov","Labels":{"com.docker.stack.namespace":"precisetesting","left":"150px","nce.company.id":"596d5e61b4d0540001685c8f","nce.user.id":"5976e6537757820001f036b0","nce.user.name":"090138","next":"precisetesting_mysql","top":"182px"},"TaskTemplate":{"ContainerSpec":{"Image":"hub.x/precisetesting/cov:'${CI_BUILD_TAG}'","StopGracePeriod":10000000000,"DNSConfig":{}},"Resources":{"Limits":{"NanoCPUs":2000000000,"MemoryBytes":2168455168},"Reservations":{"NanoCPUs":1000000000,"MemoryBytes":1073741824}},"RestartPolicy":{"Condition":"any","Delay":5000000000,"MaxAttempts":5},"Placement":{},"ForceUpdate":0,"Runtime":"container"},"Mode":{"Replicated":{"Replicas":1}},"UpdateConfig":{"Parallelism":1,"FailureAction":"pause","Monitor":5000000000,"MaxFailureRatio":0,"Order":"stop-first"},"RollbackConfig":{"Parallelism":1,"FailureAction":"pause","Monitor":5000000000,"MaxFailureRatio":0,"Order":"stop-first"},"EndpointSpec":{"Mode":"vip","Ports":[{"Name":"cov.paas.x","Protocol":"tcp","TargetPort":8080,"PublishMode":"ingress"}]}}' nce.x/u/service/precisetesting_cov
+      - curl -b nce.x.cookie nce.x/u/user/logout
